@@ -29,7 +29,39 @@ class Database:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON;")
-        return conn
+
+        # Wrap the sqlite3.Connection so that using `with db.connect() as conn:`
+        # will close the underlying connection on exit. This prevents file
+        # locks on Windows when tests create many short-lived connections.
+        class _ConnWrapper:
+            def __init__(self, raw_conn: sqlite3.Connection) -> None:
+                self._raw = raw_conn
+
+            def __enter__(self) -> sqlite3.Connection:
+                return self._raw
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                try:
+                    if exc_type is None:
+                        try:
+                            self._raw.commit()
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self._raw.rollback()
+                        except Exception:
+                            pass
+                finally:
+                    try:
+                        self._raw.close()
+                    except Exception:
+                        pass
+
+            def __getattr__(self, name: str):
+                return getattr(self._raw, name)
+
+        return _ConnWrapper(conn)
 
     def init_schema(self) -> None:
         """Create all tables (idempotent — uses CREATE TABLE IF NOT EXISTS)."""

@@ -41,12 +41,20 @@ class ScriptedGateway(PaymentGateway):
     """
 
     def __init__(self, results: list[PaymentResult]) -> None:
-        # TODO Day 3
-        raise NotImplementedError("Day 3: implement ScriptedGateway.__init__")
+        if not isinstance(results, list):
+            raise TypeError("results must be a list of PaymentResult")
+        self._results = list(results)
+        self._idx = 0
 
     def charge(self, invoice: Invoice) -> PaymentResult:
-        # TODO Day 3
-        raise NotImplementedError("Day 3: implement ScriptedGateway.charge")
+        # Return the next scripted result; if we run out, return the last result repeatedly.
+        if not self._results:
+            return PaymentResult(True)
+        if self._idx >= len(self._results):
+            return self._results[-1]
+        res = self._results[self._idx]
+        self._idx += 1
+        return res
 
 
 # ----------------------------------------------------------------
@@ -56,9 +64,16 @@ class FakeRandomGateway(PaymentGateway):
     """Succeeds at a configurable rate; seeded for reproducibility."""
 
     def __init__(self, success_rate: float = 0.7, seed: Optional[int] = None) -> None:
-        # TODO Day 3
-        raise NotImplementedError("Day 3: implement FakeRandomGateway.__init__")
+        if not (0 <= success_rate <= 1):
+            raise ValueError("success_rate must be between 0 and 1")
+        import random
+        self._rand = random.Random(seed)
+        self._success_rate = success_rate
 
     def charge(self, invoice: Invoice) -> PaymentResult:
-        # TODO Day 3
-        raise NotImplementedError("Day 3: implement FakeRandomGateway.charge")
+        ok = self._rand.random() < self._success_rate
+        if ok:
+            return PaymentResult(True)
+        # pick a generic failure reason
+        reason = self._rand.choice(["INSUFFICIENT_FUNDS", "CARD_DECLINED", "EXPIRED"])
+        return PaymentResult(False, reason)
