@@ -34,9 +34,51 @@ class TieredPricing(PricingStrategy):
     """Charges across multiple price tiers based on cumulative quantity."""
 
     def __init__(self, tiers: list[Tier]) -> None:
-        # TODO Day 1
-        raise NotImplementedError("Day 1: implement TieredPricing.__init__")
+        if not tiers:
+            raise ValueError("TieredPricing requires at least one tier")
+
+        currency = tiers[0].unit_price.currency
+        if tiers[0].from_units != 0:
+            raise ValueError("Tiers must start at 0")
+
+        previous_to = 0
+        for index, tier in enumerate(tiers):
+            if tier.from_units < 0:
+                raise ValueError("Tier from_units must be non-negative")
+            if tier.from_units != previous_to:
+                raise ValueError("Tiers must be contiguous and non-overlapping")
+            if tier.to_units is not None and tier.to_units <= tier.from_units:
+                raise ValueError("Tier to_units must be greater than from_units")
+            if tier.unit_price.currency != currency:
+                raise ValueError("All tiers must use the same currency")
+            if tier.unit_price.is_negative():
+                raise ValueError("Tier price must not be negative")
+
+            previous_to = tier.to_units if tier.to_units is not None else previous_to
+
+        if tiers[-1].to_units is not None:
+            raise ValueError("The top tier must be open-ended")
+
+        self.tiers = tiers
+        self.currency = currency
 
     def calculate(self, quantity: int) -> Money:
-        # TODO Day 1
-        raise NotImplementedError("Day 1: implement TieredPricing.calculate")
+        if not isinstance(quantity, int):
+            raise TypeError(f"Expected int quantity, got {type(quantity).__name__}")
+        if quantity < 0:
+            raise ValueError("Quantity must be non-negative")
+
+        total = Money.zero(self.currency)
+        for tier in self.tiers:
+            if tier.to_units is None:
+                applicable = max(0, quantity - tier.from_units)
+            else:
+                applicable = max(0, min(quantity, tier.to_units) - tier.from_units)
+
+            if applicable > 0:
+                total += tier.unit_price * applicable
+
+            if tier.to_units is not None and quantity < tier.to_units:
+                break
+
+        return total
