@@ -12,9 +12,17 @@ class UsageBased(PricingStrategy):
     """Charges `unit_price * quantity`."""
 
     def __init__(self, unit_price: Money) -> None:
-        # TODO Day 1
-        raise NotImplementedError("Day 1: implement UsageBased.__init__")
+        if not isinstance(unit_price, Money):
+            raise TypeError(f"Expected Money, got {type(unit_price).__name__}")
+        if unit_price.is_negative():
+            raise ValueError("Unit price must not be negative")
+
+        self.unit_price = unit_price
 
     def calculate(self, quantity: int) -> Money:
-        # TODO Day 1
-        raise NotImplementedError("Day 1: implement UsageBased.calculate")
+        if not isinstance(quantity, int):
+            raise TypeError(f"Expected int quantity, got {type(quantity).__name__}")
+        if quantity < 0:
+            raise ValueError("Quantity must be non-negative")
+
+        return self.unit_price * quantity
