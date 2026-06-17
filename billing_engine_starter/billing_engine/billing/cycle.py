@@ -6,21 +6,28 @@ advances the subscription period. Must be IDEMPOTENT (safe to run twice).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Callable, Optional
 
+from billing_engine.billing.proration import compute_proration
 from billing_engine.db import (
     Database,
     CustomerRepository, PlanRepository, SubscriptionRepository,
     UsageRecordRepository, InvoiceRepository, InvoiceLineItemRepository,
     LedgerRepository,
 )
-from billing_engine.models import Subscription
-from billing_engine.models import BillingPeriod, InvoiceStatus, PricingType, SubscriptionStatus
+from billing_engine.models import (
+    Invoice,
+    InvoiceLineItem,
+    InvoiceStatus,
+    LineItemKind,
+    LedgerEntry,
+    LedgerDirection,
+    Plan,
+    Subscription,
+)
+from billing_engine.models import BillingPeriod, PricingType, SubscriptionStatus
 from billing_engine.billing.pipeline import build_invoice
-from billing_engine.models import InvoiceLineItem
-from billing_engine.models import LedgerEntry
-from billing_engine.models import LedgerDirection
 from billing_engine.money import Money
 import sqlite3
 
@@ -147,5 +154,98 @@ class BillingCycle:
     # --------------------------------------------------------
     def upgrade_subscription(self, subscription_id: int, new_plan_id: int, switch_date: date) -> None:
         """Mid-cycle upgrade — Day 4 stretch."""
-        # TODO Day 4
-        raise NotImplementedError("Day 4: implement BillingCycle.upgrade_subscription")
+        subscription = self.subscription_repo.get(subscription_id)
+        if subscription is None:
+            raise ValueError(f"Subscription {subscription_id} not found")
+
+        old_plan = self.plan_repo.get(subscription.plan_id)
+        if old_plan is None:
+            raise ValueError(f"Old plan {subscription.plan_id} not found")
+
+        new_plan = self.plan_repo.get(new_plan_id)
+        if new_plan is None:
+            raise ValueError(f"New plan {new_plan_id} not found")
+
+        customer = self.customer_repo.get(subscription.customer_id)
+        if customer is None:
+            raise ValueError(f"Customer {subscription.customer_id} not found")
+
+        if switch_date < subscription.current_period_start or switch_date > subscription.current_period_end:
+            raise ValueError("switch_date must fall inside the current billing period")
+
+        tax_calc, tax_context = self.tax_factory(customer)
+        old_strategy = self.strategy_factory(old_plan)
+        new_strategy = self.strategy_factory(new_plan)
+        old_price = old_strategy.calculate(0)
+        new_price = new_strategy.calculate(0)
+
+        proration = compute_proration(
+            old_plan_price=old_price,
+            new_plan_price=new_price,
+            period_start=subscription.current_period_start,
+            period_end=subscription.current_period_end,
+            switch_date=switch_date,
+            tax_calc=tax_calc,
+            tax_context=tax_context,
+        )
+
+        invoice_period_start = switch_date
+        invoice_period_end = subscription.current_period_end
+        subtotal = proration.charge_amount - proration.credit_amount
+        tax_total = proration.charge_tax - proration.credit_tax
+        total = subtotal + tax_total
+        invoice = Invoice(
+            id=None,
+            subscription_id=subscription.id,
+            period_start=invoice_period_start,
+            period_end=invoice_period_end,
+            subtotal=subtotal,
+            discount_total=Money.zero(subtotal.currency),
+            tax_total=tax_total,
+            total=total,
+            status=InvoiceStatus.ISSUED,
+            issued_at=datetime.now(),
+            pdf_path=None,
+            line_items=[],
+        )
+
+        created_invoice = self.invoice_repo.add(invoice)
+        invoice_id = created_invoice.id
+
+        credit_line = InvoiceLineItem(
+            id=None,
+            invoice_id=invoice_id,
+            description=f"Proration credit ({old_plan.name})",
+            amount=-(proration.credit_amount + proration.credit_tax),
+            kind=LineItemKind.PRORATION_CREDIT,
+        )
+        charge_line = InvoiceLineItem(
+            id=None,
+            invoice_id=invoice_id,
+            description=f"Proration charge ({new_plan.name})",
+            amount=proration.charge_amount + proration.charge_tax,
+            kind=LineItemKind.PRORATION_CHARGE,
+        )
+        self.line_item_repo.add(charge_line)
+        self.line_item_repo.add(credit_line)
+
+        if total.is_negative():
+            ledger_direction = LedgerDirection.CREDIT
+            ledger_amount = -total
+            reason = "Proration credit"
+        else:
+            ledger_direction = LedgerDirection.DEBIT
+            ledger_amount = total
+            reason = "Proration charge"
+
+        ledger_entry = LedgerEntry(
+            id=None,
+            invoice_id=invoice_id,
+            customer_id=subscription.customer_id,
+            amount=ledger_amount,
+            direction=ledger_direction,
+            reason=reason,
+        )
+        self.ledger_repo.add(ledger_entry)
+
+        self.subscription_repo.update_plan(subscription.id, new_plan_id)

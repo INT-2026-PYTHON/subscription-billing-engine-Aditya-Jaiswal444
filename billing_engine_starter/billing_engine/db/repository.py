@@ -226,9 +226,17 @@ class DiscountRepository:
     def get_by_code(self, code: str) -> Optional[dict]:
         with self.db.connect() as conn:
             row = conn.execute(
-            "SELECT * FROM discounts WHERE code = ?",
-            (code,),
-        ).fetchone()
+                "SELECT * FROM discounts WHERE code = ?",
+                (code,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def get_by_id(self, discount_id: int) -> Optional[dict]:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM discounts WHERE id = ?",
+                (discount_id,),
+            ).fetchone()
         return dict(row) if row is not None else None
 
 
